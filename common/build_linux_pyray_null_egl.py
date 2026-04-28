@@ -15,6 +15,7 @@ RAYGUI_URL = (
     "https://raw.githubusercontent.com/raysan5/raygui/"
     "76b36b597edb70ffaf96f046076adc20d67e7827/src/raygui.h"
 )
+MAX_BUILD_JOBS = 8
 
 
 def run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
@@ -31,6 +32,14 @@ def capture(cmd: list[str], *, cwd: Path | None = None) -> str:
         capture_output=True,
     )
     return completed.stdout.strip()
+
+
+def build_jobs() -> str:
+    try:
+        detected = int(capture(["bash", "-lc", "nproc || echo 8"]))
+    except (ValueError, subprocess.CalledProcessError):
+        detected = MAX_BUILD_JOBS
+    return str(max(1, min(detected, MAX_BUILD_JOBS)))
 
 
 def ensure_pip(python_bin: str) -> None:
@@ -249,6 +258,7 @@ def patch_pyray_checkout(pyray_dir: Path) -> None:
 
 
 def build_and_install(*, python_bin: str, work_dir: Path | None) -> None:
+    python_bin = str(Path(python_bin).expanduser().resolve())
     try:
         verify_installed_pyray(python_bin)
         print("Existing null-EGL pyray install is already usable; skipping rebuild.", flush=True)
@@ -292,7 +302,7 @@ def build_and_install(*, python_bin: str, work_dir: Path | None) -> None:
                 "-DBUILD_GAMES=OFF",
             ]
         )
-        jobs = capture(["bash", "-lc", "nproc || echo 8"])
+        jobs = build_jobs()
         run(["cmake", "--build", str(raylib_dir / "build"), "-j", jobs])
 
         shutil.copy2(raylib_dir / "build/raylib/libraylib.a", lib_dir / "libraylib.a")

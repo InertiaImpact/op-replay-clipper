@@ -8,12 +8,16 @@ from fastapi.testclient import TestClient
 
 from webui.app import create_app
 from webui.service import (
+    COMMA_JWT_MIN_LENGTH,
     ClipJobSubmission,
     ClipWebService,
     _parse_route_duration_seconds,
     _normalize_route_input,
+    has_valid_session_token,
     route_filename_stem,
 )
+
+VALID_TEST_TOKEN = "x" * COMMA_JWT_MIN_LENGTH
 
 
 def _fake_plan_builder(request) -> SimpleNamespace:
@@ -48,7 +52,7 @@ def test_service_processes_job_and_hides_session_token(tmp_path: Path) -> None:
         route_length_resolver=lambda route, jwt_token: 630,
         runner=_fake_runner,
     )
-    service.set_session_token("secret-token")
+    service.set_session_token(VALID_TEST_TOKEN)
     created = service.submit_job(ClipJobSubmission(route_input="e99064ba80a1dc40|00000006--88ee9aafbf", render_type="wide"))
 
     finished = _wait_for_job(service, str(created["id"]))
@@ -68,12 +72,13 @@ def test_service_persists_and_reloads_session_token(tmp_path: Path) -> None:
         runner=_fake_runner,
     )
 
-    service.set_session_token("persisted-token")
+    service.set_session_token(VALID_TEST_TOKEN)
 
     token_file = tmp_path / ".cache/webui/comma.jwt"
-    assert token_file.read_text(encoding="utf-8").strip() == "persisted-token"
+    assert token_file.read_text(encoding="utf-8").strip() == VALID_TEST_TOKEN
     assert service.auth_status()["token_storage"] == "repo_local_ignored_cache"
     assert service.auth_status()["token_path"] == ".cache/webui/comma.jwt"
+    assert service.auth_status()["has_valid_session_token"] is True
 
     reloaded = ClipWebService(
         repo_root=tmp_path,
@@ -83,9 +88,43 @@ def test_service_persists_and_reloads_session_token(tmp_path: Path) -> None:
     )
 
     assert reloaded.auth_status()["has_session_token"] is True
+    assert reloaded.auth_status()["has_valid_session_token"] is True
     reloaded.clear_session_token()
     assert token_file.exists() is False
     assert reloaded.auth_status()["has_session_token"] is False
+    assert reloaded.auth_status()["has_valid_session_token"] is False
+
+
+def test_invalid_session_token_stays_visible_for_reentry(tmp_path: Path) -> None:
+    token_file = tmp_path / ".cache/webui/comma.jwt"
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    token_file.write_text("short-token\n", encoding="utf-8")
+
+    service = ClipWebService(
+        repo_root=tmp_path,
+        shared_dir=tmp_path / "shared",
+        plan_builder=_fake_plan_builder,
+        runner=_fake_runner,
+    )
+
+    assert service.auth_status()["has_session_token"] is True
+    assert service.auth_status()["has_valid_session_token"] is False
+
+
+def test_set_session_token_rejects_short_values(tmp_path: Path) -> None:
+    service = ClipWebService(
+        repo_root=tmp_path,
+        shared_dir=tmp_path / "shared",
+        plan_builder=_fake_plan_builder,
+        runner=_fake_runner,
+    )
+
+    try:
+        service.set_session_token("short-token")
+    except ValueError as error:
+        assert "looks incomplete" in str(error)
+    else:
+        raise AssertionError("Expected short token to be rejected")
 
 
 def test_service_defaults_raw_route_to_full_length(tmp_path: Path) -> None:
@@ -142,6 +181,8 @@ def test_service_preserves_url_embedded_timing_defaults(tmp_path: Path) -> None:
 def test_parse_route_duration_prefers_route_start_and_end_times() -> None:
     assert _parse_route_duration_seconds({"start_time": "2026-02-25T17:30:30", "end_time": "2026-02-25T17:45:55"}) == 925
     assert _parse_route_duration_seconds({"maxqlog": 15}) == 960
+    assert has_valid_session_token(VALID_TEST_TOKEN) is True
+    assert has_valid_session_token("short-token") is False
 
 
 def test_normalize_route_input_accepts_slash_route_id() -> None:
@@ -178,8 +219,9 @@ def test_app_auth_and_job_routes(tmp_path: Path) -> None:
     client = TestClient(create_app(service))
 
     assert client.get("/api/auth").json()["has_session_token"] is False
-    auth_after_put = client.put("/api/auth/session-token", json={"token": "jwt-value"}).json()
+    auth_after_put = client.put("/api/auth/session-token", json={"token": VALID_TEST_TOKEN}).json()
     assert auth_after_put["has_session_token"] is True
+    assert auth_after_put["has_valid_session_token"] is True
     assert auth_after_put["token_storage"] == "repo_local_ignored_cache"
     assert auth_after_put["token_path"] == ".cache/webui/comma.jwt"
 

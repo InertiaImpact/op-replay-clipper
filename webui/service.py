@@ -44,6 +44,7 @@ PASSENGER_REDACTION_STYLE_CHOICES: tuple[PassengerRedactionStyle, ...] = (
     "ir_tint",
 )
 DEFAULT_SESSION_TOKEN_PATH = Path(".cache/webui/comma.jwt")
+COMMA_JWT_MIN_LENGTH = 181
 DEFAULT_START_SECONDS = 50
 DEFAULT_LENGTH_SECONDS = 20
 LOCAL_MAXIMUM_LENGTH_SECONDS = 12 * 60 * 60
@@ -58,6 +59,10 @@ def _timestamp(value: float | None) -> str | None:
     if value is None:
         return None
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(value))
+
+
+def has_valid_session_token(token: str | None) -> bool:
+    return isinstance(token, str) and len(token.strip()) >= COMMA_JWT_MIN_LENGTH
 
 
 def _normalize_route_input(submission: "ClipJobSubmission") -> "ClipJobSubmission":
@@ -369,6 +374,7 @@ class ClipWebService:
         with self._condition:
             return {
                 "has_session_token": self._session_token is not None,
+                "has_valid_session_token": has_valid_session_token(self._session_token),
                 "jwt_url": "https://jwt.comma.ai",
                 "token_storage": "repo_local_ignored_cache",
                 "token_path": token_path,
@@ -378,6 +384,8 @@ class ClipWebService:
         stripped = token.strip()
         if not stripped:
             raise ValueError("JWT token cannot be empty.")
+        if not has_valid_session_token(stripped):
+            raise ValueError("JWT token looks incomplete. Paste the full token from https://jwt.comma.ai .")
         self._write_session_token(stripped)
         with self._condition:
             self._session_token = stripped

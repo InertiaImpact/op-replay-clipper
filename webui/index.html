@@ -295,10 +295,10 @@
         <h1>openpilot Replay Clipper</h1>
         <p class="muted">Local WSL queue UI for route clips. Paste a full connect URL or a raw <code>dongle|route</code> id, queue jobs, and watch them move through the renderer.</p>
       </div>
-      <div class="muted">Outputs land in <code>shared/</code>. JWT tokens stay memory-only for this running server process.</div>
+      <div class="muted">Outputs land in <code>shared/</code>. Valid JWT tokens are cached only in the repo's ignored <code>.cache/</code> folder.</div>
     </section>
 
-    <section class="card">
+    <section id="jwt-card" class="card">
       <h2>JWT token</h2>
       <p class="muted">Use this only when a route is private. The token is stored in the repo's ignored <code>.cache/</code> folder so it survives restarts without becoming committable.</p>
       <div class="grid">
@@ -669,9 +669,12 @@
 
     async function refreshAuth() {
       const auth = await api("/api/auth");
-      document.getElementById("auth-status").textContent = auth.has_session_token
-        ? "Session token loaded in memory."
-        : "No session token loaded.";
+      document.getElementById("jwt-card").hidden = Boolean(auth.has_valid_session_token);
+      document.getElementById("auth-status").textContent = auth.has_valid_session_token
+        ? ""
+        : auth.has_session_token
+          ? "Cached JWT token is invalid or incomplete. Paste a fresh full token."
+          : "No valid session token loaded.";
     }
 
     async function refreshAll() {
