@@ -229,11 +229,16 @@ Open `http://localhost:8765` in your browser. The web UI lets you:
 * queue multiple jobs and watch their current status/log output
 * inspect the generated clips already present in `shared/`
 
+Timing defaults in the web UI behave like this:
+
+* raw `dongle|route` ids default to the full route when you leave the timing fields untouched
+* full `connect.comma.ai/.../<start>/<end>` clip URLs keep using the timing encoded in the URL
+
 JWT handling is session-only in the web UI:
 
 * the "Open jwt.comma.ai" button opens the comma JWT page in a new tab
-* pasted JWTs are kept in memory for the running web server process only
-* the token is **not** written into tracked repo files by the web UI
+* pasted JWTs are stored in `.cache/webui/comma.jwt`, which is ignored by git
+* the token is reloaded on startup for convenience, but still stays out of tracked repo files
 
 Generated clip filenames are route-id based and sanitized so they remain easy to
 access from Windows through `\\wsl$` as well as inside WSL.

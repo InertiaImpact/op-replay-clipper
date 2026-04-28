@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import os
 import re
 import subprocess
@@ -11,10 +12,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable, Literal, cast, get_args
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+import requests
 
 from core.clip_orchestrator import ClipRequest, LocalAccel, OutputFormatInput, RenderType, build_clip_plan
 from core.driver_face_swap import (
@@ -41,6 +43,10 @@ PASSENGER_REDACTION_STYLE_CHOICES: tuple[PassengerRedactionStyle, ...] = (
     "black_silhouette",
     "ir_tint",
 )
+DEFAULT_SESSION_TOKEN_PATH = Path(".cache/webui/comma.jwt")
+DEFAULT_START_SECONDS = 50
+DEFAULT_LENGTH_SECONDS = 20
+LOCAL_MAXIMUM_LENGTH_SECONDS = 12 * 60 * 60
 
 
 def route_filename_stem(route: str) -> str:
@@ -54,13 +60,40 @@ def _timestamp(value: float | None) -> str | None:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(value))
 
 
+def _normalize_route_input(submission: "ClipJobSubmission") -> "ClipJobSubmission":
+    route_input = submission.route_input.strip()
+    if not route_input:
+        return submission
+    parsed = urlparse(route_input)
+    if parsed.scheme == "https" and parsed.hostname == "connect.comma.ai":
+        return submission.model_copy(update={"route_input": route_input})
+    if route_input.startswith("connect.comma.ai/"):
+        return submission.model_copy(update={"route_input": f"https://{route_input}"})
+
+    parts = [part for part in route_input.strip("/").split("/") if part]
+    if len(parts) == 2:
+        dongle_id, route_slug = parts
+        return submission.model_copy(update={"route_input": f"{dongle_id}|{route_slug}"})
+    if len(parts) == 3 and parts[2].isdigit():
+        dongle_id, route_slug, start_seconds = parts
+        return submission.model_copy(
+            update={
+                "route_input": f"{dongle_id}|{route_slug}",
+                "start_seconds": int(start_seconds),
+            }
+        )
+    if len(parts) == 4 and parts[2].isdigit() and parts[3].isdigit():
+        return submission.model_copy(update={"route_input": f"https://connect.comma.ai/{'/'.join(parts)}"})
+    return submission.model_copy(update={"route_input": route_input})
+
+
 class ClipJobSubmission(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     route_input: str = Field(min_length=1)
     render_type: RenderType = "ui-alt"
-    start_seconds: int = 50
-    length_seconds: int = 20
+    start_seconds: int = DEFAULT_START_SECONDS
+    length_seconds: int = DEFAULT_LENGTH_SECONDS
     smear_seconds: int = 3
     target_mb: int = 9
     file_format: OutputFormatInput = "auto"
@@ -129,7 +162,7 @@ class ClipJobSubmission(BaseModel):
             data_root=self.data_root,
             execution_context="local",
             minimum_length_seconds=1,
-            maximum_length_seconds=300,
+            maximum_length_seconds=LOCAL_MAXIMUM_LENGTH_SECONDS,
             local_acceleration=self.accel,
             openpilot_dir=self.openpilot_dir,
             qcam=self.qcam,
@@ -167,6 +200,7 @@ class ClipJob:
 
 PlanBuilder = Callable[[ClipRequest], SimpleNamespace]
 JobRunner = Callable[[ClipJob, Path, Callable[[str], None]], None]
+RouteLengthResolver = Callable[[str, str | None], int]
 
 
 def build_clip_command(job: ClipJob) -> list[str]:
@@ -264,17 +298,25 @@ class ClipWebService:
         *,
         repo_root: Path,
         shared_dir: Path,
+        session_token_path: Path | None = None,
+        route_length_resolver: RouteLengthResolver | None = None,
         plan_builder: PlanBuilder | None = None,
         runner: JobRunner | None = None,
     ) -> None:
         self.repo_root = repo_root.resolve()
         self.shared_dir = shared_dir.resolve()
         self.shared_dir.mkdir(parents=True, exist_ok=True)
+        self._session_token_path = (
+            (self.repo_root / session_token_path).resolve()
+            if session_token_path is not None
+            else (self.repo_root / DEFAULT_SESSION_TOKEN_PATH).resolve()
+        )
+        self._route_length_resolver = route_length_resolver or resolve_full_route_length_seconds
         self._plan_builder = plan_builder or cast(PlanBuilder, build_clip_plan)
         self._runner = runner or default_job_runner
         self._jobs: dict[str, ClipJob] = {}
         self._pending: deque[str] = deque()
-        self._session_token: str | None = None
+        self._session_token = self._load_session_token()
         self._active_job_id: str | None = None
         self._condition = threading.Condition()
         self._worker = threading.Thread(target=self._worker_loop, name="clip-web-worker", daemon=True)
@@ -293,8 +335,8 @@ class ClipWebService:
             "passenger_redaction_styles": list(PASSENGER_REDACTION_STYLE_CHOICES),
             "defaults": {
                 "render_type": "ui-alt",
-                "start_seconds": 50,
-                "length_seconds": 20,
+                "start_seconds": DEFAULT_START_SECONDS,
+                "length_seconds": DEFAULT_LENGTH_SECONDS,
                 "smear_seconds": 3,
                 "target_mb": 9,
                 "file_format": "auto",
@@ -323,28 +365,49 @@ class ClipWebService:
         }
 
     def auth_status(self) -> dict[str, object]:
+        token_path = self._session_token_path.relative_to(self.repo_root).as_posix()
         with self._condition:
             return {
                 "has_session_token": self._session_token is not None,
                 "jwt_url": "https://jwt.comma.ai",
-                "token_storage": "memory_only",
+                "token_storage": "repo_local_ignored_cache",
+                "token_path": token_path,
             }
 
     def set_session_token(self, token: str) -> None:
         stripped = token.strip()
         if not stripped:
             raise ValueError("JWT token cannot be empty.")
+        self._write_session_token(stripped)
         with self._condition:
             self._session_token = stripped
 
     def clear_session_token(self) -> None:
+        if self._session_token_path.exists():
+            self._session_token_path.unlink()
         with self._condition:
             self._session_token = None
+
+    def _load_session_token(self) -> str | None:
+        if not self._session_token_path.exists():
+            return None
+        token = self._session_token_path.read_text(encoding="utf-8").strip()
+        return token or None
+
+    def _write_session_token(self, token: str) -> None:
+        self._session_token_path.parent.mkdir(parents=True, exist_ok=True)
+        self._session_token_path.write_text(f"{token}\n", encoding="utf-8")
+        try:
+            self._session_token_path.chmod(0o600)
+        except OSError:
+            pass
 
     def submit_job(self, submission: ClipJobSubmission) -> dict[str, object]:
         with self._condition:
             jwt_token = self._session_token
-        provisional_request = submission.to_clip_request(
+        normalized_submission = _normalize_route_input(submission)
+        resolved_submission = self._resolve_submission_defaults(normalized_submission, jwt_token)
+        provisional_request = resolved_submission.to_clip_request(
             output_path=str(self.shared_dir / "_pending.mp4"),
             jwt_token=jwt_token,
         )
@@ -352,20 +415,32 @@ class ClipWebService:
         route = str(plan.route)
         with self._condition:
             output_path = self._reserve_output_path_locked(route)
-            request = submission.to_clip_request(output_path=str(output_path), jwt_token=jwt_token)
+            request = resolved_submission.to_clip_request(output_path=str(output_path), jwt_token=jwt_token)
             job = ClipJob(
                 id=uuid4().hex,
-                submission=submission,
+                submission=resolved_submission,
                 request=request,
                 route=route,
                 output_path=output_path,
                 jwt_token=jwt_token,
             )
-            job.logs.append(f"Queued {submission.render_type} render for {route}.")
+            job.logs.append(f"Queued {resolved_submission.render_type} render for {route}.")
+            if resolved_submission.start_seconds == 0 and resolved_submission.route_input == route:
+                job.logs.append(f"Using the full route length of {resolved_submission.length_seconds} seconds by default.")
             self._jobs[job.id] = job
             self._pending.append(job.id)
             self._condition.notify()
             return self._snapshot_locked(job.id)
+
+    def _resolve_submission_defaults(
+        self,
+        submission: ClipJobSubmission,
+        jwt_token: str | None,
+    ) -> ClipJobSubmission:
+        if not _should_expand_raw_route_defaults(submission):
+            return submission
+        full_length_seconds = self._route_length_resolver(submission.route_input, jwt_token)
+        return submission.model_copy(update={"start_seconds": 0, "length_seconds": full_length_seconds})
 
     def list_jobs(self) -> list[dict[str, object]]:
         with self._condition:
@@ -481,3 +556,51 @@ def create_default_service() -> ClipWebService:
     repo_root = Path(__file__).resolve().parents[1]
     shared_dir = repo_root / "shared"
     return ClipWebService(repo_root=repo_root, shared_dir=shared_dir)
+
+
+def _parse_route_duration_seconds(metadata: object) -> int | None:
+    if not isinstance(metadata, dict):
+        return None
+    start_time = metadata.get("start_time")
+    end_time = metadata.get("end_time")
+    if isinstance(start_time, str) and isinstance(end_time, str):
+        return max(1, int((datetime.fromisoformat(end_time) - datetime.fromisoformat(start_time)).total_seconds()))
+    maxqlog = metadata.get("maxqlog")
+    procqlog = metadata.get("procqlog")
+    numeric_segment_counts = [value for value in (maxqlog, procqlog) if isinstance(value, int) and value >= 0]
+    if numeric_segment_counts:
+        return (max(numeric_segment_counts) + 1) * 60
+    segment_numbers = metadata.get("segment_numbers")
+    if isinstance(segment_numbers, list):
+        numeric_segments = [value for value in segment_numbers if isinstance(value, int) and value >= 0]
+        if numeric_segments:
+            return (max(numeric_segments) + 1) * 60
+    return None
+
+
+def resolve_full_route_length_seconds(route: str, jwt_token: str | None) -> int:
+    route_url = route.replace("|", "%7C")
+    headers = {"Authorization": f"JWT {jwt_token}"} if jwt_token else None
+    endpoints = (
+        f"https://api.commadotai.com/v1/route/{route_url}/files",
+        f"https://api.commadotai.com/v1/route/{route_url}",
+    )
+    for endpoint in endpoints:
+        response = requests.get(endpoint, headers=headers, timeout=30)
+        if response.status_code != 200:
+            continue
+        duration_seconds = _parse_route_duration_seconds(response.json())
+        if duration_seconds is not None:
+            return duration_seconds
+    raise ValueError(f"Could not determine the full route length for {route}.")
+
+
+def _should_expand_raw_route_defaults(submission: ClipJobSubmission) -> bool:
+    if "connect.comma.ai" in submission.route_input:
+        return False
+    if "|" not in submission.route_input:
+        return False
+    return (
+        submission.start_seconds == DEFAULT_START_SECONDS
+        and submission.length_seconds == DEFAULT_LENGTH_SECONDS
+    )

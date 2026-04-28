@@ -287,7 +287,7 @@
 
     <section class="card">
       <h2>JWT token</h2>
-      <p class="muted">Use this only when a route is private. The token is never written into repo files by this UI and disappears when the server stops.</p>
+      <p class="muted">Use this only when a route is private. The token is stored in the repo's ignored <code>.cache/</code> folder so it survives restarts without becoming committable.</p>
       <div class="grid">
         <label>
           Session token
@@ -304,11 +304,12 @@
 
     <section class="card">
       <h2>Queue a clip</h2>
+      <p class="muted">If you paste a raw <code>dongle|route</code> id and leave the timing fields at their defaults, the web UI expands that to the full route automatically. Full clip URLs from comma Connect keep using the timing embedded in the URL.</p>
       <form id="clip-form">
         <div class="grid">
           <label style="grid-column: 1 / -1;">
             Route URL or route ID
-            <input name="route_input" required placeholder="https://connect.comma.ai/... or e99064ba80a1dc40|00000006--88ee9aafbf">
+            <input name="route_input" required placeholder="https://connect.comma.ai/... or e99064...|00000006--... or e99064.../00000006--.../11">
           </label>
           <label>
             Render type
@@ -675,7 +676,7 @@
           body: JSON.stringify({ token }),
         });
         document.getElementById("jwt-token").value = "";
-        setMessage("JWT token loaded into memory for this server session.");
+        setMessage("JWT token saved in the local ignored cache for this repo.");
         await refreshAuth();
       } catch (error) {
         setMessage(error.message, true);
@@ -686,7 +687,7 @@
       try {
         await api("/api/auth/session-token", { method: "DELETE" });
         document.getElementById("jwt-token").value = "";
-        setMessage("JWT token cleared from memory.");
+        setMessage("JWT token cleared from the local ignored cache.");
         await refreshAuth();
       } catch (error) {
         setMessage(error.message, true);

@@ -90,3 +90,17 @@ def test_managed_checkout_reclones_when_ff_only_update_fails(
     assert ["git", "lfs", "version"] in commands
     assert ["git", "clone", *openpilot_bootstrap.GIT_CLONE_FLAGS, "--branch", "master", "https://github.com/commaai/openpilot.git", str(openpilot_dir)] in commands
     assert ["git", "lfs", "pull"] in commands
+
+
+def test_ensure_noninteractive_tinygrad_sudo_rewrites_supported_files(tmp_path: Path) -> None:
+    openpilot_dir = tmp_path / "openpilot"
+    system_py = openpilot_dir / "tinygrad/runtime/support/system.py"
+    nested_system_py = openpilot_dir / "tinygrad_repo/tinygrad/runtime/support/system.py"
+    for target in (system_py, nested_system_py):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("os.system(\"sudo sh -c 'echo 64 > /proc/sys/vm/nr_hugepages'\")\n")
+
+    openpilot_bootstrap.ensure_noninteractive_tinygrad_sudo(openpilot_dir)
+
+    assert "sudo -n sh -c" in system_py.read_text()
+    assert "sudo -n sh -c" in nested_system_py.read_text()

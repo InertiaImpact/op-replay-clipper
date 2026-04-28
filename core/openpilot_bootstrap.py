@@ -31,6 +31,12 @@ GIT_SUBMODULE_UPDATE_FLAGS = [
     "--jobs",
     "8",
 ]
+_TINYGRAD_NONINTERACTIVE_SUDO_TARGETS = (
+    Path("tinygrad/runtime/support/system.py"),
+    Path("tinygrad_repo/tinygrad/runtime/support/system.py"),
+)
+_INTERACTIVE_SUDO_SNIPPET = "sudo sh -c"
+_NONINTERACTIVE_SUDO_SNIPPET = "sudo -n sh -c"
 
 
 def _uv_cmd() -> str:
@@ -174,6 +180,20 @@ def ensure_macos_env_fix(openpilot_dir: Path) -> None:
             handle.write(f"{line}\n")
 
 
+def ensure_noninteractive_tinygrad_sudo(openpilot_dir: Path) -> None:
+    for relative_path in _TINYGRAD_NONINTERACTIVE_SUDO_TARGETS:
+        target = openpilot_dir / relative_path
+        if not target.exists():
+            continue
+        original = target.read_text()
+        if _INTERACTIVE_SUDO_SNIPPET not in original:
+            continue
+        updated = original.replace(_INTERACTIVE_SUDO_SNIPPET, _NONINTERACTIVE_SUDO_SNIPPET)
+        if updated != original:
+            target.write_text(updated)
+            print(f"Patched {target} to use non-interactive sudo for local bootstrap.")
+
+
 def bootstrap_openpilot(openpilot_dir: Path) -> None:
     python_executable = _resolve_openpilot_python(openpilot_dir)
     uv_bin = _uv_cmd()
@@ -182,6 +202,7 @@ def bootstrap_openpilot(openpilot_dir: Path) -> None:
         sync_cmd.extend(["--python", python_executable])
     _run(sync_cmd, cwd=openpilot_dir)
     ensure_macos_env_fix(openpilot_dir)
+    ensure_noninteractive_tinygrad_sudo(openpilot_dir)
 
     scons_targets = [
         "msgq_repo/msgq/ipc_pyx.so",

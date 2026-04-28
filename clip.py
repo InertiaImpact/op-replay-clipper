@@ -36,6 +36,7 @@ from core.ui_layouts import UI_ALT_VARIANTS
 DEMO_ROUTE = "5beb9b58bd12b691|0000010a--a51155e496"
 DEMO_START_SECONDS = 90
 DEMO_LENGTH_SECONDS = 15
+LOCAL_MAXIMUM_LENGTH_SECONDS = 12 * 60 * 60
 RENDER_TYPES: tuple[RenderType, ...] = (
     "ui",
     "ui-alt",
@@ -209,7 +210,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 data_root=args.data_root,
                 execution_context="local",
                 minimum_length_seconds=1,
-                maximum_length_seconds=300,
+                maximum_length_seconds=LOCAL_MAXIMUM_LENGTH_SECONDS,
                 local_acceleration=args.accel,
                 openpilot_dir=openpilot_dir,
                 qcam=args.qcam,
