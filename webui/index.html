@@ -130,6 +130,19 @@
       width: auto;
     }
 
+    .job-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+
+    .job-actions button {
+      width: auto;
+      padding: 8px 10px;
+      font-size: 0.85rem;
+    }
+
     .inline-check {
       display: flex;
       align-items: center;
@@ -571,7 +584,16 @@
       }
       root.innerHTML = jobs.map((job) => {
         const queuePosition = job.queue_position ? `Queue position: ${job.queue_position}` : "Queue position: active or finished";
-        const logBlock = job.logs.length ? `<pre>${job.logs.map((line) => line.replace(/</g, "&lt;")).join("\n")}</pre>` : "";
+        const logText = job.logs.join("\n");
+        const encodedLogText = encodeURIComponent(logText);
+        const escapedLogText = logText
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+        const logBlock = job.logs.length
+          ? `<div class="job-actions"><button type="button" class="secondary copy-job-log" data-log="${encodedLogText}">Copy log</button></div><pre>${escapedLogText}</pre>`
+          : "";
         const errorBlock = job.error ? `<div class="muted" style="color: var(--danger);">Error: ${job.error}</div>` : "";
         return `
           <article class="job">
@@ -597,6 +619,20 @@
           </article>
         `;
       }).join("");
+    }
+
+    async function copyJobLog(button) {
+      const logText = button.dataset.log ? decodeURIComponent(button.dataset.log) : "";
+      if (!logText) {
+        setMessage("No log text available to copy.", true);
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(logText);
+        setMessage("Copied job log.");
+      } catch (error) {
+        setMessage("Failed to copy job log.", true);
+      }
     }
 
     function formatBytes(size) {
@@ -701,6 +737,13 @@
       document.getElementById("refresh-now").addEventListener("click", refreshAll);
       document.getElementById("save-jwt").addEventListener("click", saveJwtToken);
       document.getElementById("clear-jwt").addEventListener("click", clearJwtToken);
+      document.getElementById("jobs").addEventListener("click", (event) => {
+        const button = event.target.closest(".copy-job-log");
+        if (!button) {
+          return;
+        }
+        copyJobLog(button);
+      });
       document.getElementById("open-jwt").addEventListener("click", () => {
         const target = state.options?.jwt_url || "https://jwt.comma.ai";
         window.open(target, "_blank", "noopener,noreferrer");
