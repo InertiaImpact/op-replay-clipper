@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>openpilot Replay Clipper</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f172a;
+      --card: #111827;
+      --muted: #94a3b8;
+      --text: #e5e7eb;
+      --border: #334155;
+      --accent: #38bdf8;
+      --accent-2: #0ea5e9;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Inter, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    a {
+      color: var(--accent);
+    }
+
+    .layout {
+      max-width: 1320px;
+      margin: 0 auto;
+      padding: 24px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .card {
+      background: rgba(17, 24, 39, 0.94);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.18);
+    }
+
+    .hero {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .hero h1,
+    .card h2,
+    .card h3 {
+      margin-top: 0;
+      margin-bottom: 8px;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 0.95rem;
+    }
+
+    input,
+    select,
+    button,
+    textarea {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #020617;
+      color: var(--text);
+      padding: 10px 12px;
+      font: inherit;
+    }
+
+    input[type="checkbox"] {
+      width: auto;
+      margin-right: 8px;
+    }
+
+    button {
+      cursor: pointer;
+      background: linear-gradient(180deg, var(--accent), var(--accent-2));
+      border: none;
+      color: #082f49;
+      font-weight: 700;
+    }
+
+    button.secondary {
+      background: #1e293b;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    button.danger {
+      background: #3f1d23;
+      color: #fecaca;
+      border: 1px solid #7f1d1d;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .button-row > * {
+      width: auto;
+    }
+
+    .inline-check {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding-top: 28px;
+    }
+
+    details {
+      margin-top: 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      background: rgba(2, 6, 23, 0.55);
+    }
+
+    details summary {
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .message {
+      min-height: 1.25rem;
+      margin-top: 12px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .status-queued,
+    .status-preparing {
+      background: rgba(245, 158, 11, 0.16);
+      color: #fde68a;
+    }
+
+    .status-running {
+      background: rgba(14, 165, 233, 0.16);
+      color: #bae6fd;
+    }
+
+    .status-succeeded {
+      background: rgba(34, 197, 94, 0.16);
+      color: #bbf7d0;
+    }
+
+    .status-failed {
+      background: rgba(239, 68, 68, 0.16);
+      color: #fecaca;
+    }
+
+    .jobs,
+    .outputs {
+      display: grid;
+      gap: 12px;
+    }
+
+    .job,
+    .output {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      background: rgba(2, 6, 23, 0.6);
+    }
+
+    .job-header,
+    .output-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .progress {
+      margin: 10px 0 12px;
+      height: 8px;
+      border-radius: 999px;
+      background: #020617;
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 18%;
+      background: linear-gradient(90deg, rgba(56, 189, 248, 0.4), rgba(14, 165, 233, 0.95));
+      transition: width 0.25s ease;
+    }
+
+    .progress-running {
+      width: 72%;
+    }
+
+    .progress-succeeded {
+      width: 100%;
+      background: linear-gradient(90deg, rgba(34, 197, 94, 0.7), rgba(34, 197, 94, 1));
+    }
+
+    .progress-failed {
+      width: 100%;
+      background: linear-gradient(90deg, rgba(239, 68, 68, 0.7), rgba(239, 68, 68, 1));
+    }
+
+    .meta {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    pre {
+      margin: 10px 0 0;
+      padding: 12px;
+      background: #020617;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 240px;
+      overflow: auto;
+      font-size: 0.86rem;
+    }
+
+    .empty {
+      color: var(--muted);
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      padding: 18px;
+      text-align: center;
+    }
+
+    @media (max-width: 800px) {
+      .layout {
+        padding: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="layout">
+    <section class="card hero">
+      <div>
+        <h1>openpilot Replay Clipper</h1>
+        <p class="muted">Local WSL queue UI for route clips. Paste a full connect URL or a raw <code>dongle|route</code> id, queue jobs, and watch them move through the renderer.</p>
+      </div>
+      <div class="muted">Outputs land in <code>shared/</code>. JWT tokens stay memory-only for this running server process.</div>
+    </section>
+
+    <section class="card">
+      <h2>JWT token</h2>
+      <p class="muted">Use this only when a route is private. The token is never written into repo files by this UI and disappears when the server stops.</p>
+      <div class="grid">
+        <label>
+          Session token
+          <input id="jwt-token" type="password" placeholder="Paste a token from jwt.comma.ai">
+        </label>
+      </div>
+      <div class="button-row" style="margin-top: 12px;">
+        <button id="open-jwt" type="button">Open jwt.comma.ai</button>
+        <button id="save-jwt" type="button" class="secondary">Save token to session</button>
+        <button id="clear-jwt" type="button" class="danger">Clear token</button>
+        <span id="auth-status" class="muted"></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Queue a clip</h2>
+      <form id="clip-form">
+        <div class="grid">
+          <label style="grid-column: 1 / -1;">
+            Route URL or route ID
+            <input name="route_input" required placeholder="https://connect.comma.ai/... or e99064ba80a1dc40|00000006--88ee9aafbf">
+          </label>
+          <label>
+            Render type
+            <select name="render_type" data-options="render_types"></select>
+          </label>
+          <label>
+            Start seconds
+            <input name="start_seconds" type="number" min="0">
+          </label>
+          <label>
+            Length seconds
+            <input name="length_seconds" type="number" min="1" max="300">
+          </label>
+          <label>
+            Smear seconds
+            <input name="smear_seconds" type="number" min="0">
+          </label>
+          <label>
+            Target MB
+            <input name="target_mb" type="number" min="1">
+          </label>
+          <label>
+            File format
+            <select name="file_format" data-options="file_formats"></select>
+          </label>
+          <label>
+            Acceleration
+            <select name="accel" data-options="accelerations"></select>
+          </label>
+          <label>
+            UI-alt variant
+            <select name="ui_alt_variant" data-options="ui_alt_variants"></select>
+          </label>
+          <label class="inline-check">
+            <span><input name="qcam" type="checkbox">Use qcam/log inputs</span>
+          </label>
+        </div>
+
+        <details>
+          <summary>Advanced render options</summary>
+          <div class="grid">
+            <label>
+              Openpilot directory
+              <input name="openpilot_dir" type="text">
+            </label>
+            <label>
+              Data root
+              <input name="data_root" type="text">
+            </label>
+            <label>
+              Explicit data dir
+              <input name="data_dir" type="text" placeholder="Optional">
+            </label>
+            <label>
+              Forward-upon-wide H
+              <input name="forward_upon_wide_h" type="text" placeholder="2.2 or auto">
+            </label>
+            <label class="inline-check">
+              <span><input name="windowed" type="checkbox">Windowed renderer</span>
+            </label>
+            <label class="inline-check">
+              <span><input name="skip_openpilot_update" type="checkbox">Skip openpilot update</span>
+            </label>
+            <label class="inline-check">
+              <span><input name="skip_openpilot_bootstrap" type="checkbox">Skip openpilot bootstrap</span>
+            </label>
+            <label class="inline-check">
+              <span><input name="skip_download" type="checkbox">Reuse downloaded route data</span>
+            </label>
+          </div>
+        </details>
+
+        <details>
+          <summary>Driver-face options</summary>
+          <div class="grid">
+            <label>
+              Driver-face anonymization
+              <select name="driver_face_anonymization" data-options="driver_face_anonymization"></select>
+            </label>
+            <label>
+              Profile
+              <select name="driver_face_profile" data-options="driver_face_profiles"></select>
+            </label>
+            <label>
+              Passenger redaction
+              <select name="passenger_redaction_style" data-options="passenger_redaction_styles"></select>
+            </label>
+            <label>
+              Donor selection
+              <select name="driver_face_selection" data-options="driver_face_selection_modes"></select>
+            </label>
+            <label>
+              Face preset
+              <select name="driver_face_preset" data-options="driver_face_presets"></select>
+            </label>
+            <label>
+              Source image
+              <input name="driver_face_source_image" type="text">
+            </label>
+            <label>
+              Donor bank dir
+              <input name="driver_face_donor_bank_dir" type="text">
+            </label>
+            <label>
+              FaceFusion root
+              <input name="facefusion_root" type="text">
+            </label>
+            <label>
+              FaceFusion model
+              <input name="facefusion_model" type="text">
+            </label>
+          </div>
+        </details>
+
+        <div class="button-row" style="margin-top: 14px;">
+          <button type="submit">Start clip</button>
+          <button id="refresh-now" type="button" class="secondary">Refresh</button>
+        </div>
+        <div id="form-message" class="message muted"></div>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="job-header">
+        <div>
+          <h2>Queue and progress</h2>
+          <p class="muted">Queued jobs run one at a time to avoid multiple heavy renders competing for the same local machine.</p>
+        </div>
+      </div>
+      <div id="jobs" class="jobs"></div>
+    </section>
+
+    <section class="card">
+      <h2>Output folder</h2>
+      <div id="outputs" class="outputs"></div>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      options: null,
+    };
+
+    const fieldsAsIntegers = new Set(["start_seconds", "length_seconds", "smear_seconds", "target_mb"]);
+    const fieldsAsBooleans = new Set(["qcam", "windowed", "skip_openpilot_update", "skip_openpilot_bootstrap", "skip_download"]);
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+        ...options,
+      });
+      if (!response.ok) {
+        let detail = `${response.status} ${response.statusText}`;
+        try {
+          const payload = await response.json();
+          detail = payload.detail || detail;
+        } catch (error) {
+          // Ignore JSON parse errors for non-JSON bodies.
+        }
+        throw new Error(detail);
+      }
+      if (response.status === 204) {
+        return null;
+      }
+      return response.json();
+    }
+
+    function setMessage(text, isError = false) {
+      const el = document.getElementById("form-message");
+      el.textContent = text;
+      el.style.color = isError ? "var(--danger)" : "var(--muted)";
+    }
+
+    function populateSelect(select, values, includeBlank = false) {
+      select.innerHTML = "";
+      if (includeBlank) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "Default";
+        select.appendChild(option);
+      }
+      for (const value of values) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        select.appendChild(option);
+      }
+    }
+
+    function applyDefaults(defaults) {
+      const form = document.getElementById("clip-form");
+      for (const [name, value] of Object.entries(defaults)) {
+        const field = form.elements.namedItem(name);
+        if (!field) {
+          continue;
+        }
+        if (field instanceof HTMLInputElement && field.type === "checkbox") {
+          field.checked = Boolean(value);
+          continue;
+        }
+        field.value = value ?? "";
+      }
+    }
+
+    async function loadOptions() {
+      state.options = await api("/api/options");
+      populateSelect(document.querySelector('[name="render_type"]'), state.options.render_types);
+      populateSelect(document.querySelector('[name="file_format"]'), state.options.file_formats);
+      populateSelect(document.querySelector('[name="accel"]'), state.options.accelerations);
+      populateSelect(document.querySelector('[name="ui_alt_variant"]'), state.options.ui_alt_variants, true);
+      populateSelect(document.querySelector('[name="driver_face_anonymization"]'), state.options.driver_face_anonymization);
+      populateSelect(document.querySelector('[name="driver_face_profile"]'), state.options.driver_face_profiles);
+      populateSelect(document.querySelector('[name="passenger_redaction_style"]'), state.options.passenger_redaction_styles);
+      populateSelect(document.querySelector('[name="driver_face_selection"]'), state.options.driver_face_selection_modes);
+      populateSelect(document.querySelector('[name="driver_face_preset"]'), state.options.driver_face_presets);
+      applyDefaults(state.options.defaults);
+    }
+
+    function serializeForm() {
+      const form = document.getElementById("clip-form");
+      const payload = {};
+      for (const element of Array.from(form.elements)) {
+        if (!element.name) {
+          continue;
+        }
+        if (fieldsAsBooleans.has(element.name)) {
+          payload[element.name] = element.checked;
+          continue;
+        }
+        if (fieldsAsIntegers.has(element.name)) {
+          payload[element.name] = Number.parseInt(element.value, 10);
+          continue;
+        }
+        const trimmed = element.value.trim();
+        payload[element.name] = trimmed === "" ? null : trimmed;
+      }
+      payload.route_input = (payload.route_input || "").trim();
+      return payload;
+    }
+
+    function progressClass(job) {
+      if (job.state === "running") {
+        return "progress-running";
+      }
+      if (job.state === "succeeded") {
+        return "progress-succeeded";
+      }
+      if (job.state === "failed") {
+        return "progress-failed";
+      }
+      return "";
+    }
+
+    function renderJobs(jobs) {
+      const root = document.getElementById("jobs");
+      if (!jobs.length) {
+        root.innerHTML = '<div class="empty">No jobs queued yet.</div>';
+        return;
+      }
+      root.innerHTML = jobs.map((job) => {
+        const queuePosition = job.queue_position ? `Queue position: ${job.queue_position}` : "Queue position: active or finished";
+        const logBlock = job.logs.length ? `<pre>${job.logs.map((line) => line.replace(/</g, "&lt;")).join("\n")}</pre>` : "";
+        const errorBlock = job.error ? `<div class="muted" style="color: var(--danger);">Error: ${job.error}</div>` : "";
+        return `
+          <article class="job">
+            <div class="job-header">
+              <div>
+                <h3>${job.output_name}</h3>
+                <div class="muted">${job.route}</div>
+              </div>
+              <span class="status-pill status-${job.state}">${job.state}</span>
+            </div>
+            <div class="progress"><div class="progress-fill ${progressClass(job)}"></div></div>
+            <div class="meta">
+              <div>Render type: ${job.render_type}</div>
+              <div>Stage: ${job.stage}</div>
+              <div>${queuePosition}</div>
+              <div>Created: ${job.created_at || "n/a"}</div>
+              <div>Started: ${job.started_at || "n/a"}</div>
+              <div>Finished: ${job.finished_at || "n/a"}</div>
+              <div>Output: <a href="${job.output_url}" download>${job.output_name}</a></div>
+            </div>
+            ${errorBlock}
+            ${logBlock}
+          </article>
+        `;
+      }).join("");
+    }
+
+    function formatBytes(size) {
+      if (size < 1024) {
+        return `${size} B`;
+      }
+      if (size < 1024 * 1024) {
+        return `${(size / 1024).toFixed(1)} KB`;
+      }
+      if (size < 1024 * 1024 * 1024) {
+        return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+      }
+      return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    }
+
+    function renderOutputs(outputs) {
+      const root = document.getElementById("outputs");
+      if (!outputs.length) {
+        root.innerHTML = '<div class="empty">No clips in shared/ yet.</div>';
+        return;
+      }
+      root.innerHTML = outputs.map((output) => `
+        <article class="output">
+          <div class="output-header">
+            <div>
+              <strong><a href="${output.url}" download>${output.name}</a></strong>
+              <div class="muted">Modified: ${output.modified_at || "n/a"}</div>
+            </div>
+            <div class="muted">${formatBytes(output.size_bytes)}</div>
+          </div>
+        </article>
+      `).join("");
+    }
+
+    async function refreshAuth() {
+      const auth = await api("/api/auth");
+      document.getElementById("auth-status").textContent = auth.has_session_token
+        ? "Session token loaded in memory."
+        : "No session token loaded.";
+    }
+
+    async function refreshAll() {
+      const [jobs, outputs] = await Promise.all([
+        api("/api/jobs"),
+        api("/api/outputs"),
+      ]);
+      renderJobs(jobs);
+      renderOutputs(outputs);
+      await refreshAuth();
+    }
+
+    async function handleFormSubmit(event) {
+      event.preventDefault();
+      setMessage("Queueing clip...");
+      try {
+        const payload = serializeForm();
+        await api("/api/jobs", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        setMessage("Clip queued.");
+        await refreshAll();
+      } catch (error) {
+        setMessage(error.message, true);
+      }
+    }
+
+    async function saveJwtToken() {
+      const token = document.getElementById("jwt-token").value.trim();
+      if (!token) {
+        setMessage("Paste a JWT token first.", true);
+        return;
+      }
+      try {
+        await api("/api/auth/session-token", {
+          method: "PUT",
+          body: JSON.stringify({ token }),
+        });
+        document.getElementById("jwt-token").value = "";
+        setMessage("JWT token loaded into memory for this server session.");
+        await refreshAuth();
+      } catch (error) {
+        setMessage(error.message, true);
+      }
+    }
+
+    async function clearJwtToken() {
+      try {
+        await api("/api/auth/session-token", { method: "DELETE" });
+        document.getElementById("jwt-token").value = "";
+        setMessage("JWT token cleared from memory.");
+        await refreshAuth();
+      } catch (error) {
+        setMessage(error.message, true);
+      }
+    }
+
+    async function init() {
+      await loadOptions();
+      await refreshAll();
+      document.getElementById("clip-form").addEventListener("submit", handleFormSubmit);
+      document.getElementById("refresh-now").addEventListener("click", refreshAll);
+      document.getElementById("save-jwt").addEventListener("click", saveJwtToken);
+      document.getElementById("clear-jwt").addEventListener("click", clearJwtToken);
+      document.getElementById("open-jwt").addEventListener("click", () => {
+        const target = state.options?.jwt_url || "https://jwt.comma.ai";
+        window.open(target, "_blank", "noopener,noreferrer");
+      });
+      window.setInterval(refreshAll, 2000);
+    }
+
+    init().catch((error) => {
+      setMessage(error.message, true);
+    });
+  </script>
+</body>
+</html>

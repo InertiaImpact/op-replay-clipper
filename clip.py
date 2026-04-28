@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Sequence
 
@@ -60,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-s", "--start-seconds", type=int, default=None)
     parser.add_argument("-l", "--length-seconds", type=int, default=None)
     parser.add_argument("--smear-seconds", type=int, default=3)
-    parser.add_argument("-j", "--jwt-token", default="")
+    parser.add_argument("-j", "--jwt-token", default=os.environ.get("COMMA_JWT", ""))
     parser.add_argument("-o", "--output", default="./shared/local-clip.mp4")
     parser.add_argument("--openpilot-dir", default=default_local_openpilot_root())
     parser.add_argument("--openpilot-branch", default=default_openpilot_branch())

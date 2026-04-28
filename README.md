@@ -212,6 +212,32 @@ uv run python clip.py 360-ui "https://connect.comma.ai/<dongle>/<route>/<start>/
 uv run python clip.py forward "a2a0ccea32023010|2023-07-27--13-01-19" --demo
 ```
 
+### Local web UI for WSL
+
+If you want a lightweight local frontend instead of manually running `clip.py`,
+there is now a small queue UI that runs beside the existing CLI:
+
+```bash
+uv sync
+uv run python web.py --host 0.0.0.0 --port 8765
+```
+
+Open `http://localhost:8765` in your browser. The web UI lets you:
+
+* paste a full `connect.comma.ai` URL or raw `dongle|route` id
+* choose render options, including `ui-alt` variants and advanced driver-face settings
+* queue multiple jobs and watch their current status/log output
+* inspect the generated clips already present in `shared/`
+
+JWT handling is session-only in the web UI:
+
+* the "Open jwt.comma.ai" button opens the comma JWT page in a new tab
+* pasted JWTs are kept in memory for the running web server process only
+* the token is **not** written into tracked repo files by the web UI
+
+Generated clip filenames are route-id based and sanitized so they remain easy to
+access from Windows through `\\wsl$` as well as inside WSL.
+
 Driver backing-video face anonymization:
 
 ```bash
