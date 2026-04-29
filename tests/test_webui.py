@@ -11,6 +11,7 @@ from webui.service import (
     COMMA_JWT_MIN_LENGTH,
     ClipJobSubmission,
     ClipWebService,
+    _bookmark_python_bin,
     _parse_route_duration_seconds,
     _normalize_route_input,
     has_valid_session_token,
@@ -30,6 +31,10 @@ def _fake_runner(job, repo_root: Path, on_log) -> None:
     on_log("fake renderer finished")
 
 
+def _fake_bookmark_resolver(route: str, jwt_token: str | None, data_root: Path, openpilot_dir: Path, route_length_seconds: int) -> list[int]:
+    return [30, 120]
+
+
 def _wait_for_job(service: ClipWebService, job_id: str) -> dict[str, object]:
     for _ in range(100):
         snapshot = service.get_job(job_id)
@@ -42,6 +47,14 @@ def _wait_for_job(service: ClipWebService, job_id: str) -> dict[str, object]:
 
 def test_route_filename_stem_is_windows_safe() -> None:
     assert route_filename_stem("e99064ba80a1dc40|00000006--88ee9aafbf") == "e99064ba80a1dc40_00000006--88ee9aafbf"
+
+
+def test_bookmark_python_bin_prefers_openpilot_venv(tmp_path: Path) -> None:
+    venv_python = tmp_path / ".venv/bin/python"
+    venv_python.parent.mkdir(parents=True, exist_ok=True)
+    venv_python.write_text("", encoding="utf-8")
+
+    assert _bookmark_python_bin(tmp_path) == str(venv_python)
 
 
 def test_service_processes_job_and_hides_session_token(tmp_path: Path) -> None:
@@ -151,6 +164,70 @@ def test_service_defaults_raw_route_to_full_length(tmp_path: Path) -> None:
     assert any("Using the full route length of 630 seconds by default." in line for line in finished["logs"])
 
 
+def test_service_queues_multiple_bookmark_clips(tmp_path: Path) -> None:
+    observed: list[tuple[int, int, str]] = []
+
+    def _runner(job, repo_root: Path, on_log) -> None:
+        observed.append((job.request.start_seconds, job.request.length_seconds, job.output_path.name))
+        job.output_path.write_bytes(b"mp4")
+
+    service = ClipWebService(
+        repo_root=tmp_path,
+        shared_dir=tmp_path / "shared",
+        plan_builder=_fake_plan_builder,
+        route_length_resolver=lambda route, jwt_token: 180,
+        bookmark_resolver=_fake_bookmark_resolver,
+        runner=_runner,
+    )
+
+    created = service.submit_job(
+        ClipJobSubmission(
+            route_input="e99064ba80a1dc40|00000006--88ee9aafbf",
+            render_type="wide",
+            use_bookmarks=True,
+            bookmark_padding_seconds=15,
+        )
+    )
+
+    assert created["job_count"] == 2
+    assert created["bookmark_times_seconds"] == [30, 120]
+    snapshots = created["jobs"]
+    assert isinstance(snapshots, list)
+    first = _wait_for_job(service, str(snapshots[0]["id"]))
+    second = _wait_for_job(service, str(snapshots[1]["id"]))
+
+    assert first["state"] == "succeeded"
+    assert second["state"] == "succeeded"
+    assert observed == [
+        (15, 30, "e99064ba80a1dc40_00000006--88ee9aafbf_BM1.mp4"),
+        (105, 30, "e99064ba80a1dc40_00000006--88ee9aafbf_BM2.mp4"),
+    ]
+
+
+def test_service_rejects_bookmark_mode_without_bookmarks(tmp_path: Path) -> None:
+    service = ClipWebService(
+        repo_root=tmp_path,
+        shared_dir=tmp_path / "shared",
+        plan_builder=_fake_plan_builder,
+        route_length_resolver=lambda route, jwt_token: 180,
+        bookmark_resolver=lambda route, jwt_token, data_root, openpilot_dir, route_length_seconds: [],
+        runner=_fake_runner,
+    )
+
+    try:
+        service.submit_job(
+            ClipJobSubmission(
+                route_input="e99064ba80a1dc40|00000006--88ee9aafbf",
+                render_type="wide",
+                use_bookmarks=True,
+            )
+        )
+    except ValueError as error:
+        assert "No bookmarks were found" in str(error)
+    else:
+        raise AssertionError("Expected missing bookmarks to be rejected")
+
+
 def test_service_preserves_url_embedded_timing_defaults(tmp_path: Path) -> None:
     def _runner(job, repo_root: Path, on_log) -> None:
         job.output_path.write_bytes(b"mp4")
@@ -178,6 +255,32 @@ def test_service_preserves_url_embedded_timing_defaults(tmp_path: Path) -> None:
     assert all("Using the full route length" not in line for line in finished["logs"])
 
 
+def test_service_expands_start_only_route_input_to_route_end(tmp_path: Path) -> None:
+    observed = {}
+
+    def _runner(job, repo_root: Path, on_log) -> None:
+        observed["start_seconds"] = job.request.start_seconds
+        observed["length_seconds"] = job.request.length_seconds
+        job.output_path.write_bytes(b"mp4")
+
+    service = ClipWebService(
+        repo_root=tmp_path,
+        shared_dir=tmp_path / "shared",
+        plan_builder=_fake_plan_builder,
+        route_length_resolver=lambda route, jwt_token: 630,
+        runner=_runner,
+    )
+
+    created = service.submit_job(
+        ClipJobSubmission(route_input="e99064ba80a1dc40/00000006--88ee9aafbf/0", render_type="wide")
+    )
+    finished = _wait_for_job(service, str(created["id"]))
+
+    assert finished["state"] == "succeeded"
+    assert observed == {"start_seconds": 0, "length_seconds": 630}
+    assert any("Using the remaining route length of 630 seconds from 0 seconds by default." in line for line in finished["logs"])
+
+
 def test_parse_route_duration_prefers_route_start_and_end_times() -> None:
     assert _parse_route_duration_seconds({"start_time": "2026-02-25T17:30:30", "end_time": "2026-02-25T17:45:55"}) == 925
     assert _parse_route_duration_seconds({"maxqlog": 15}) == 960
@@ -189,23 +292,37 @@ def test_normalize_route_input_accepts_slash_route_id() -> None:
     normalized = _normalize_route_input(
         ClipJobSubmission(route_input="e99064ba80a1dc40/00000006--88ee9aafbf", render_type="wide")
     )
-    assert normalized.route_input == "e99064ba80a1dc40|00000006--88ee9aafbf"
+    assert normalized.submission.route_input == "e99064ba80a1dc40|00000006--88ee9aafbf"
+    assert normalized.expand_start_only_to_route_end is False
 
 
 def test_normalize_route_input_accepts_slash_route_with_start() -> None:
     normalized = _normalize_route_input(
         ClipJobSubmission(route_input="e99064ba80a1dc40/00000006--88ee9aafbf/11", render_type="wide")
     )
-    assert normalized.route_input == "e99064ba80a1dc40|00000006--88ee9aafbf"
-    assert normalized.start_seconds == 11
-    assert normalized.length_seconds == 20
+    assert normalized.submission.route_input == "e99064ba80a1dc40|00000006--88ee9aafbf"
+    assert normalized.submission.start_seconds == 11
+    assert normalized.submission.length_seconds == 20
+    assert normalized.expand_start_only_to_route_end is True
+
+
+def test_normalize_route_input_accepts_bare_connect_route_url() -> None:
+    normalized = _normalize_route_input(
+        ClipJobSubmission(
+            route_input="https://connect.comma.ai/e99064ba80a1dc40/0000000a--e9c896d5fd",
+            render_type="wide",
+        )
+    )
+    assert normalized.submission.route_input == "e99064ba80a1dc40|0000000a--e9c896d5fd"
+    assert normalized.expand_start_only_to_route_end is False
 
 
 def test_normalize_route_input_accepts_hostless_connect_clip_url() -> None:
     normalized = _normalize_route_input(
         ClipJobSubmission(route_input="e99064ba80a1dc40/00000006--88ee9aafbf/21/90", render_type="wide")
     )
-    assert normalized.route_input == "https://connect.comma.ai/e99064ba80a1dc40/00000006--88ee9aafbf/21/90"
+    assert normalized.submission.route_input == "https://connect.comma.ai/e99064ba80a1dc40/00000006--88ee9aafbf/21/90"
+    assert normalized.expand_start_only_to_route_end is False
 
 
 def test_app_auth_and_job_routes(tmp_path: Path) -> None:
@@ -236,6 +353,7 @@ def test_app_auth_and_job_routes(tmp_path: Path) -> None:
     assert response.status_code == 201
     payload = response.json()
     assert "jwt" not in payload
+    assert payload["job_count"] == 1
     finished = _wait_for_job(service, payload["id"])
     assert finished["state"] == "succeeded"
 
@@ -245,3 +363,30 @@ def test_app_auth_and_job_routes(tmp_path: Path) -> None:
     clear = client.delete("/api/auth/session-token")
     assert clear.status_code == 204
     assert client.get("/api/auth").json()["has_session_token"] is False
+
+
+def test_app_bookmark_job_route_returns_multiple_jobs(tmp_path: Path) -> None:
+    service = ClipWebService(
+        repo_root=tmp_path,
+        shared_dir=tmp_path / "shared",
+        plan_builder=_fake_plan_builder,
+        route_length_resolver=lambda route, jwt_token: 180,
+        bookmark_resolver=_fake_bookmark_resolver,
+        runner=_fake_runner,
+    )
+    client = TestClient(create_app(service))
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "route_input": "e99064ba80a1dc40|00000006--88ee9aafbf",
+            "render_type": "wide",
+            "use_bookmarks": True,
+            "bookmark_padding_seconds": 15,
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["job_count"] == 2
+    assert len(payload["jobs"]) == 2

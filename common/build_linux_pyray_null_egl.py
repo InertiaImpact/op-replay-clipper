@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -16,6 +17,7 @@ RAYGUI_URL = (
     "76b36b597edb70ffaf96f046076adc20d67e7827/src/raygui.h"
 )
 MAX_BUILD_JOBS = 8
+GIT_CLONE_ATTEMPTS = 3
 
 
 def run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
@@ -40,6 +42,26 @@ def build_jobs() -> str:
     except (ValueError, subprocess.CalledProcessError):
         detected = MAX_BUILD_JOBS
     return str(max(1, min(detected, MAX_BUILD_JOBS)))
+
+
+def absolutize_python_bin(python_bin: str) -> str:
+    path = Path(python_bin).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return str(path.absolute())
+
+
+def clone_repo(repo: str, destination: Path) -> None:
+    for attempt in range(1, GIT_CLONE_ATTEMPTS + 1):
+        try:
+            run(["git", "clone", "--depth=1", repo, str(destination)])
+            return
+        except subprocess.CalledProcessError:
+            shutil.rmtree(destination, ignore_errors=True)
+            if attempt == GIT_CLONE_ATTEMPTS:
+                raise
+            print(f"Retrying clone of {repo} (attempt {attempt + 1}/{GIT_CLONE_ATTEMPTS})", flush=True)
+            time.sleep(2)
 
 
 def ensure_pip(python_bin: str) -> None:
@@ -258,7 +280,7 @@ def patch_pyray_checkout(pyray_dir: Path) -> None:
 
 
 def build_and_install(*, python_bin: str, work_dir: Path | None) -> None:
-    python_bin = str(Path(python_bin).expanduser().resolve())
+    python_bin = absolutize_python_bin(python_bin)
     try:
         verify_installed_pyray(python_bin)
         print("Existing null-EGL pyray install is already usable; skipping rebuild.", flush=True)
@@ -281,7 +303,7 @@ def build_and_install(*, python_bin: str, work_dir: Path | None) -> None:
         glfw_include_dir.mkdir(parents=True, exist_ok=True)
         lib_dir.mkdir(parents=True, exist_ok=True)
 
-        run(["git", "clone", "--depth=1", RAYLIB_REPO, str(raylib_dir)])
+        clone_repo(RAYLIB_REPO, raylib_dir)
         patch_raylib_checkout(raylib_dir)
 
         run(
@@ -296,7 +318,7 @@ def build_and_install(*, python_bin: str, work_dir: Path | None) -> None:
             "-DGLFW_BUILD_WAYLAND=OFF",
             "-DGLFW_BUILD_X11=ON",
             "-DBUILD_SHARED_LIBS=OFF",
-            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_BUILD_TYPE=Debug",
             "-DWITH_PIC=ON",
                 "-DBUILD_EXAMPLES=OFF",
                 "-DBUILD_GAMES=OFF",
@@ -311,7 +333,7 @@ def build_and_install(*, python_bin: str, work_dir: Path | None) -> None:
         shutil.copy2(raylib_dir / "src/external/glfw/include/GLFW/glfw3.h", glfw_include_dir / "glfw3.h")
         run(["curl", "-fsSLo", str(include_dir / "raygui.h"), RAYGUI_URL])
 
-        run(["git", "clone", "--depth=1", PYRAY_REPO, str(pyray_dir)])
+        clone_repo(PYRAY_REPO, pyray_dir)
         patch_pyray_checkout(pyray_dir)
         env = dict(
             **{

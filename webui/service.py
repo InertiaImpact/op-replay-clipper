@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 import os
 import re
 import subprocess
@@ -33,6 +34,7 @@ from core.driver_face_swap import (
 )
 from core.forward_upon_wide import DEFAULT_FORWARD_UPON_WIDE_H, ForwardUponWideHInput, parse_forward_upon_wide_h
 from core.openpilot_config import default_local_openpilot_root
+from core.route_downloader import downloadSegments
 from core.ui_layouts import UI_ALT_VARIANTS, UIAltVariant
 
 JOB_STATES = ("queued", "preparing", "running", "succeeded", "failed")
@@ -47,7 +49,22 @@ DEFAULT_SESSION_TOKEN_PATH = Path(".cache/webui/comma.jwt")
 COMMA_JWT_MIN_LENGTH = 181
 DEFAULT_START_SECONDS = 50
 DEFAULT_LENGTH_SECONDS = 20
+DEFAULT_BOOKMARK_PADDING_SECONDS = 15
 LOCAL_MAXIMUM_LENGTH_SECONDS = 12 * 60 * 60
+
+
+@dataclass(frozen=True)
+class NormalizedSubmission:
+    submission: "ClipJobSubmission"
+    expand_start_only_to_route_end: bool = False
+
+
+@dataclass(frozen=True)
+class BookmarkClip:
+    index: int
+    bookmark_seconds: int
+    start_seconds: int
+    length_seconds: int
 
 
 def route_filename_stem(route: str) -> str:
@@ -65,31 +82,35 @@ def has_valid_session_token(token: str | None) -> bool:
     return isinstance(token, str) and len(token.strip()) >= COMMA_JWT_MIN_LENGTH
 
 
-def _normalize_route_input(submission: "ClipJobSubmission") -> "ClipJobSubmission":
+def _normalize_route_input(submission: "ClipJobSubmission") -> NormalizedSubmission:
     route_input = submission.route_input.strip()
     if not route_input:
-        return submission
-    parsed = urlparse(route_input)
-    if parsed.scheme == "https" and parsed.hostname == "connect.comma.ai":
-        return submission.model_copy(update={"route_input": route_input})
+        return NormalizedSubmission(submission=submission)
     if route_input.startswith("connect.comma.ai/"):
-        return submission.model_copy(update={"route_input": f"https://{route_input}"})
-
-    parts = [part for part in route_input.strip("/").split("/") if part]
+        route_input = f"https://{route_input}"
+    parsed = urlparse(route_input)
+    parts = [part for part in (parsed.path if parsed.hostname == "connect.comma.ai" else route_input).strip("/").split("/") if part]
+    if parsed.scheme == "https" and parsed.hostname == "connect.comma.ai" and len(parts) == 4 and parts[2].isdigit() and parts[3].isdigit():
+        return NormalizedSubmission(submission=submission.model_copy(update={"route_input": route_input}))
     if len(parts) == 2:
         dongle_id, route_slug = parts
-        return submission.model_copy(update={"route_input": f"{dongle_id}|{route_slug}"})
+        return NormalizedSubmission(submission=submission.model_copy(update={"route_input": f"{dongle_id}|{route_slug}"}))
     if len(parts) == 3 and parts[2].isdigit():
         dongle_id, route_slug, start_seconds = parts
-        return submission.model_copy(
-            update={
-                "route_input": f"{dongle_id}|{route_slug}",
-                "start_seconds": int(start_seconds),
-            }
+        return NormalizedSubmission(
+            submission=submission.model_copy(
+                update={
+                    "route_input": f"{dongle_id}|{route_slug}",
+                    "start_seconds": int(start_seconds),
+                }
+            ),
+            expand_start_only_to_route_end=True,
         )
     if len(parts) == 4 and parts[2].isdigit() and parts[3].isdigit():
-        return submission.model_copy(update={"route_input": f"https://connect.comma.ai/{'/'.join(parts)}"})
-    return submission.model_copy(update={"route_input": route_input})
+        return NormalizedSubmission(
+            submission=submission.model_copy(update={"route_input": f"https://connect.comma.ai/{'/'.join(parts)}"})
+        )
+    return NormalizedSubmission(submission=submission.model_copy(update={"route_input": route_input}))
 
 
 class ClipJobSubmission(BaseModel):
@@ -99,6 +120,8 @@ class ClipJobSubmission(BaseModel):
     render_type: RenderType = "ui-alt"
     start_seconds: int = DEFAULT_START_SECONDS
     length_seconds: int = DEFAULT_LENGTH_SECONDS
+    use_bookmarks: bool = False
+    bookmark_padding_seconds: int = DEFAULT_BOOKMARK_PADDING_SECONDS
     smear_seconds: int = 3
     target_mb: int = 9
     file_format: OutputFormatInput = "auto"
@@ -201,11 +224,14 @@ class ClipJob:
     error: str | None = None
     logs: list[str] = field(default_factory=list)
     jwt_token: str | None = field(default=None, repr=False)
+    bookmark_index: int | None = None
+    bookmark_seconds: int | None = None
 
 
 PlanBuilder = Callable[[ClipRequest], SimpleNamespace]
 JobRunner = Callable[[ClipJob, Path, Callable[[str], None]], None]
 RouteLengthResolver = Callable[[str, str | None], int]
+BookmarkResolver = Callable[[str, str | None, Path, Path, int], list[int]]
 
 
 def build_clip_command(job: ClipJob) -> list[str]:
@@ -297,6 +323,99 @@ def default_job_runner(job: ClipJob, repo_root: Path, on_log: Callable[[str], No
         raise RuntimeError(f"clip.py exited with code {return_code}.")
 
 
+def _route_segment_directory_name(route: str, segment_id: int) -> str:
+    route_slug = re.sub(r"^[^|]+\|", "", route)
+    return f"{route_slug}--{segment_id}"
+
+
+def _bookmark_log_paths(data_root: Path, route: str, route_length_seconds: int) -> list[Path]:
+    max_segment = max(0, max(route_length_seconds - 1, 0) // 60)
+    paths: list[Path] = []
+    for segment_id in range(max_segment + 1):
+        segment_dir = data_root / _route_segment_directory_name(route, segment_id)
+        for candidate_name in ("qlog.zst", "qlog.bz2", "qlog", "rlog.zst", "rlog.bz2", "rlog"):
+            candidate = segment_dir / candidate_name
+            if candidate.exists():
+                paths.append(candidate)
+                break
+    return paths
+
+
+def _bookmark_python_bin(openpilot_dir: Path) -> str:
+    candidate = openpilot_dir / ".venv/bin/python"
+    if candidate.exists():
+        return str(candidate)
+    return sys.executable
+
+
+def resolve_route_bookmark_seconds(
+    route: str,
+    jwt_token: str | None,
+    data_root: Path,
+    openpilot_dir: Path,
+    route_length_seconds: int,
+) -> list[int]:
+    if not openpilot_dir.exists():
+        raise ValueError(f"Openpilot directory does not exist for bookmark lookup: {openpilot_dir}")
+    data_root.mkdir(parents=True, exist_ok=True)
+    download_length_seconds = max(1, route_length_seconds - 1)
+    downloadSegments(
+        data_root,
+        route,
+        0,
+        0,
+        download_length_seconds,
+        ["qlogs"],
+        jwt_token,
+        decompress_logs=False,
+    )
+    log_paths = _bookmark_log_paths(data_root, route, route_length_seconds)
+    if not log_paths:
+        return []
+
+    script = """
+import json
+import sys
+from pathlib import Path
+
+openpilot_dir = Path(sys.argv[1])
+sys.path.insert(0, str(openpilot_dir))
+from openpilot.tools.lib.logreader import LogReader
+
+bookmark_times = []
+first_log_mono_time = None
+for log_path in sys.argv[2:]:
+    for msg in LogReader(log_path):
+        if first_log_mono_time is None:
+            first_log_mono_time = msg.logMonoTime
+        if msg.which() in ("userBookmark", "bookmarkButton"):
+            bookmark_times.append(max(0, int(round((msg.logMonoTime - first_log_mono_time) / 1e9))))
+
+deduped = sorted(set(bookmark_times))
+print(json.dumps(deduped))
+"""
+    try:
+        result = subprocess.run(
+            [_bookmark_python_bin(openpilot_dir), "-c", script, str(openpilot_dir), *[str(path) for path in log_paths]],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or error.stdout or "").strip()
+        if detail:
+            raise ValueError(f"Bookmark lookup failed: {detail}") from error
+        raise ValueError("Bookmark lookup failed.") from error
+    output = result.stdout.strip()
+    if not output:
+        return []
+    parsed = json.loads(output)
+    if not isinstance(parsed, list):
+        raise ValueError("Bookmark extractor returned an unexpected response.")
+    bookmark_seconds = [int(value) for value in parsed]
+    return [value for value in bookmark_seconds if value >= 0]
+
+
 class ClipWebService:
     def __init__(
         self,
@@ -305,6 +424,7 @@ class ClipWebService:
         shared_dir: Path,
         session_token_path: Path | None = None,
         route_length_resolver: RouteLengthResolver | None = None,
+        bookmark_resolver: BookmarkResolver | None = None,
         plan_builder: PlanBuilder | None = None,
         runner: JobRunner | None = None,
     ) -> None:
@@ -317,6 +437,7 @@ class ClipWebService:
             else (self.repo_root / DEFAULT_SESSION_TOKEN_PATH).resolve()
         )
         self._route_length_resolver = route_length_resolver or resolve_full_route_length_seconds
+        self._bookmark_resolver = bookmark_resolver or resolve_route_bookmark_seconds
         self._plan_builder = plan_builder or cast(PlanBuilder, build_clip_plan)
         self._runner = runner or default_job_runner
         self._jobs: dict[str, ClipJob] = {}
@@ -342,6 +463,8 @@ class ClipWebService:
                 "render_type": "ui-alt",
                 "start_seconds": DEFAULT_START_SECONDS,
                 "length_seconds": DEFAULT_LENGTH_SECONDS,
+                "use_bookmarks": False,
+                "bookmark_padding_seconds": DEFAULT_BOOKMARK_PADDING_SECONDS,
                 "smear_seconds": 3,
                 "target_mb": 9,
                 "file_format": "auto",
@@ -413,8 +536,15 @@ class ClipWebService:
     def submit_job(self, submission: ClipJobSubmission) -> dict[str, object]:
         with self._condition:
             jwt_token = self._session_token
-        normalized_submission = _normalize_route_input(submission)
-        resolved_submission = self._resolve_submission_defaults(normalized_submission, jwt_token)
+        normalized = _normalize_route_input(submission)
+        normalized_submission = normalized.submission
+        if normalized_submission.use_bookmarks:
+            return self._submit_bookmark_jobs(normalized_submission, jwt_token)
+        resolved_submission = self._resolve_submission_defaults(
+            normalized_submission,
+            jwt_token,
+            expand_start_only_to_route_end=normalized.expand_start_only_to_route_end,
+        )
         provisional_request = resolved_submission.to_clip_request(
             output_path=str(self.shared_dir / "_pending.mp4"),
             jwt_token=jwt_token,
@@ -433,18 +563,129 @@ class ClipWebService:
                 jwt_token=jwt_token,
             )
             job.logs.append(f"Queued {resolved_submission.render_type} render for {route}.")
-            if resolved_submission.start_seconds == 0 and resolved_submission.route_input == route:
+            if (
+                normalized.expand_start_only_to_route_end
+                and resolved_submission.route_input == route
+                and resolved_submission.length_seconds != normalized_submission.length_seconds
+            ):
+                job.logs.append(
+                    f"Using the remaining route length of {resolved_submission.length_seconds} seconds from "
+                    f"{resolved_submission.start_seconds} seconds by default."
+                )
+            elif resolved_submission.start_seconds == 0 and resolved_submission.route_input == route:
                 job.logs.append(f"Using the full route length of {resolved_submission.length_seconds} seconds by default.")
             self._jobs[job.id] = job
             self._pending.append(job.id)
             self._condition.notify()
-            return self._snapshot_locked(job.id)
+            snapshot = self._snapshot_locked(job.id)
+            response = dict(snapshot)
+            response["jobs"] = [snapshot]
+            response["job_count"] = 1
+            return response
+
+    def _submit_bookmark_jobs(
+        self,
+        submission: ClipJobSubmission,
+        jwt_token: str | None,
+    ) -> dict[str, object]:
+        provisional_request = submission.to_clip_request(
+            output_path=str(self.shared_dir / "_pending.mp4"),
+            jwt_token=jwt_token,
+        )
+        plan = self._plan_builder(provisional_request)
+        route = str(plan.route)
+        full_length_seconds = self._route_length_resolver(route, jwt_token)
+        bookmark_clips = self._build_bookmark_clips(
+            route=route,
+            submission=submission,
+            jwt_token=jwt_token,
+            full_length_seconds=full_length_seconds,
+        )
+        if not bookmark_clips:
+            raise ValueError(f"No bookmarks were found for {route}.")
+
+        snapshots: list[dict[str, object]] = []
+        with self._condition:
+            for bookmark_clip in bookmark_clips:
+                bookmark_submission = submission.model_copy(
+                    update={
+                        "route_input": route,
+                        "start_seconds": bookmark_clip.start_seconds,
+                        "length_seconds": bookmark_clip.length_seconds,
+                    }
+                )
+                output_stem = f"{route_filename_stem(route)}_BM{bookmark_clip.index}"
+                output_path = self._reserve_output_path_locked(route, output_stem=output_stem)
+                request = bookmark_submission.to_clip_request(output_path=str(output_path), jwt_token=jwt_token)
+                job = ClipJob(
+                    id=uuid4().hex,
+                    submission=bookmark_submission,
+                    request=request,
+                    route=route,
+                    output_path=output_path,
+                    jwt_token=jwt_token,
+                    bookmark_index=bookmark_clip.index,
+                    bookmark_seconds=bookmark_clip.bookmark_seconds,
+                )
+                job.logs.append(
+                    f"Queued bookmark clip BM{bookmark_clip.index} for {route} "
+                    f"covering {bookmark_clip.start_seconds}s to "
+                    f"{bookmark_clip.start_seconds + bookmark_clip.length_seconds}s "
+                    f"around bookmark at {bookmark_clip.bookmark_seconds}s."
+                )
+                self._jobs[job.id] = job
+                self._pending.append(job.id)
+                snapshots.append(self._snapshot_locked(job.id))
+            self._condition.notify_all()
+
+        response = dict(snapshots[0])
+        response["jobs"] = snapshots
+        response["job_count"] = len(snapshots)
+        response["bookmark_times_seconds"] = [clip.bookmark_seconds for clip in bookmark_clips]
+        return response
+
+    def _build_bookmark_clips(
+        self,
+        *,
+        route: str,
+        submission: ClipJobSubmission,
+        jwt_token: str | None,
+        full_length_seconds: int,
+    ) -> list[BookmarkClip]:
+        bookmark_seconds = self._bookmark_resolver(
+            route,
+            jwt_token,
+            self._resolve_repo_path(submission.data_root),
+            self._resolve_repo_path(submission.openpilot_dir),
+            full_length_seconds,
+        )
+        padding_seconds = submission.bookmark_padding_seconds
+        clips: list[BookmarkClip] = []
+        for index, bookmark_seconds_value in enumerate(bookmark_seconds, start=1):
+            start_seconds = max(0, bookmark_seconds_value - padding_seconds)
+            end_seconds = min(full_length_seconds, bookmark_seconds_value + padding_seconds)
+            clips.append(
+                BookmarkClip(
+                    index=index,
+                    bookmark_seconds=bookmark_seconds_value,
+                    start_seconds=start_seconds,
+                    length_seconds=max(1, end_seconds - start_seconds),
+                )
+            )
+        return clips
 
     def _resolve_submission_defaults(
         self,
         submission: ClipJobSubmission,
         jwt_token: str | None,
+        *,
+        expand_start_only_to_route_end: bool = False,
     ) -> ClipJobSubmission:
+        if expand_start_only_to_route_end and _should_expand_start_only_route_defaults(submission):
+            full_length_seconds = self._route_length_resolver(submission.route_input, jwt_token)
+            return submission.model_copy(
+                update={"length_seconds": max(1, full_length_seconds - submission.start_seconds)}
+            )
         if not _should_expand_raw_route_defaults(submission):
             return submission
         full_length_seconds = self._route_length_resolver(submission.route_input, jwt_token)
@@ -475,8 +716,8 @@ class ClipWebService:
             )
         return outputs
 
-    def _reserve_output_path_locked(self, route: str) -> Path:
-        stem = route_filename_stem(route)
+    def _reserve_output_path_locked(self, route: str, *, output_stem: str | None = None) -> Path:
+        stem = output_stem or route_filename_stem(route)
         reserved = {job.output_path.name for job in self._jobs.values()}
         candidate = self.shared_dir / f"{stem}.mp4"
         suffix = 2
@@ -556,8 +797,16 @@ class ClipWebService:
             "queue_position": queue_positions.get(job.id),
             "output_name": job.output_path.name,
             "output_url": f"/outputs/{quote(job.output_path.name)}",
+            "bookmark_index": job.bookmark_index,
+            "bookmark_seconds": job.bookmark_seconds,
             "logs": job.logs[-20:],
         }
+
+    def _resolve_repo_path(self, value: str) -> Path:
+        path = Path(value)
+        if path.is_absolute():
+            return path.resolve()
+        return (self.repo_root / path).resolve()
 
 
 def create_default_service() -> ClipWebService:
@@ -612,3 +861,11 @@ def _should_expand_raw_route_defaults(submission: ClipJobSubmission) -> bool:
         submission.start_seconds == DEFAULT_START_SECONDS
         and submission.length_seconds == DEFAULT_LENGTH_SECONDS
     )
+
+
+def _should_expand_start_only_route_defaults(submission: ClipJobSubmission) -> bool:
+    if "connect.comma.ai" in submission.route_input:
+        return False
+    if "|" not in submission.route_input:
+        return False
+    return submission.length_seconds == DEFAULT_LENGTH_SECONDS

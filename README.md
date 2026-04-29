@@ -228,11 +228,13 @@ Open `http://localhost:8765` in your browser. The web UI lets you:
 * choose render options, including `ui-alt` variants and advanced driver-face settings
 * queue multiple jobs and watch their current status/log output
 * inspect the generated clips already present in `shared/`
+* queue one clip per route bookmark with symmetric before/after padding when you enable bookmark mode
 
 Timing defaults in the web UI behave like this:
 
 * raw `dongle|route` ids default to the full route when you leave the timing fields untouched
 * full `connect.comma.ai/.../<start>/<end>` clip URLs keep using the timing encoded in the URL
+* bookmark mode ignores the visible start/length fields and instead creates one clip per logged bookmark using the configured padding before and after each bookmark
 
 JWT handling is session-only in the web UI:
 
@@ -242,6 +244,7 @@ JWT handling is session-only in the web UI:
 
 Generated clip filenames are route-id based and sanitized so they remain easy to
 access from Windows through `\\wsl$` as well as inside WSL.
+Bookmark-generated clips append `_BM1`, `_BM2`, and so on in route order.
 
 Driver backing-video face anonymization:
 

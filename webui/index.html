@@ -35,11 +35,30 @@
     }
 
     .layout {
-      max-width: 1320px;
+      width: 100%;
+      max-width: none;
       margin: 0 auto;
-      padding: 24px;
+      padding: 24px 32px;
       display: grid;
       gap: 16px;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(420px, 1.1fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .main-column,
+    .side-column {
+      display: grid;
+      gap: 16px;
+    }
+
+    .side-column {
+      position: sticky;
+      top: 16px;
     }
 
     .card {
@@ -206,6 +225,68 @@
       gap: 12px;
     }
 
+    .output-group {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: rgba(2, 6, 23, 0.6);
+    }
+
+    .output-group-header {
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(51, 65, 85, 0.65);
+      background: rgba(15, 23, 42, 0.9);
+    }
+
+    .output-group-header strong {
+      display: block;
+    }
+
+    .output-group-body {
+      display: grid;
+      gap: 0;
+    }
+
+    .outputs-table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(2, 6, 23, 0.6);
+    }
+
+    .outputs-table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 760px;
+    }
+
+    .outputs-table th,
+    .outputs-table td {
+      padding: 12px 14px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid rgba(51, 65, 85, 0.65);
+    }
+
+    .outputs-table th {
+      color: var(--muted);
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      background: rgba(15, 23, 42, 0.9);
+    }
+
+    .outputs-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .output-player {
+      width: min(100%, 340px);
+      display: block;
+      border-radius: 10px;
+      background: #020617;
+    }
+
     .job,
     .output {
       border: 1px solid var(--border);
@@ -285,6 +366,14 @@
       .layout {
         padding: 16px;
       }
+
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .side-column {
+        position: static;
+      }
     }
   </style>
 </head>
@@ -315,159 +404,174 @@
       </div>
     </section>
 
-    <section class="card">
-      <h2>Queue a clip</h2>
-      <p class="muted">If you paste a raw <code>dongle|route</code> id and leave the timing fields at their defaults, the web UI expands that to the full route automatically. Full clip URLs from comma Connect keep using the timing embedded in the URL.</p>
-      <form id="clip-form">
-        <div class="grid">
-          <label style="grid-column: 1 / -1;">
-            Route URL or route ID
-            <input name="route_input" required placeholder="https://connect.comma.ai/... or e99064...|00000006--... or e99064.../00000006--.../11">
-          </label>
-          <label>
-            Render type
-            <select name="render_type" data-options="render_types"></select>
-          </label>
-          <label>
-            Start seconds
-            <input name="start_seconds" type="number" min="0">
-          </label>
-          <label>
-            Length seconds
-            <input name="length_seconds" type="number" min="1" max="300">
-          </label>
-          <label>
-            Smear seconds
-            <input name="smear_seconds" type="number" min="0">
-          </label>
-          <label>
-            Target MB
-            <input name="target_mb" type="number" min="1">
-          </label>
-          <label>
-            File format
-            <select name="file_format" data-options="file_formats"></select>
-          </label>
-          <label>
-            Acceleration
-            <select name="accel" data-options="accelerations"></select>
-          </label>
-          <label>
-            UI-alt variant
-            <select name="ui_alt_variant" data-options="ui_alt_variants"></select>
-          </label>
-          <label class="inline-check">
-            <span><input name="qcam" type="checkbox">Use qcam/log inputs</span>
-          </label>
-        </div>
+    <div class="workspace">
+      <div class="main-column">
+        <section class="card">
+          <h2>Queue a clip</h2>
+          <p class="muted">If you paste a raw <code>dongle|route</code> id and leave the timing fields at their defaults, the web UI expands that to the full route automatically. Full clip URLs from comma Connect keep using the timing embedded in the URL. Bookmark mode queues one clip per route bookmark and uses the padding field for both before and after each bookmark.</p>
+          <form id="clip-form">
+            <div class="grid">
+              <label style="grid-column: 1 / -1;">
+                Route URL or route ID
+                <input name="route_input" required placeholder="https://connect.comma.ai/... or e99064...|00000006--... or e99064.../00000006--.../11">
+              </label>
+              <label>
+                Render type
+                <select name="render_type" data-options="render_types"></select>
+              </label>
+              <label>
+                Start seconds
+                <input name="start_seconds" type="number" min="0">
+              </label>
+              <label>
+                Length seconds
+                <input name="length_seconds" type="number" min="1" max="300">
+              </label>
+              <label class="inline-check">
+                <span><input name="use_bookmarks" type="checkbox">Use bookmarks</span>
+              </label>
+              <label>
+                Time before/after bookmark
+                <input name="bookmark_padding_seconds" type="number" min="1">
+              </label>
+              <label>
+                Smear seconds
+                <input name="smear_seconds" type="number" min="0">
+              </label>
+              <label>
+                Target MB
+                <input name="target_mb" type="number" min="1">
+              </label>
+              <label>
+                File format
+                <select name="file_format" data-options="file_formats"></select>
+              </label>
+              <label>
+                Acceleration
+                <select name="accel" data-options="accelerations"></select>
+              </label>
+              <label>
+                UI-alt variant
+                <select name="ui_alt_variant" data-options="ui_alt_variants"></select>
+              </label>
+              <label class="inline-check">
+                <span><input name="qcam" type="checkbox">Use qcam/log inputs</span>
+              </label>
+            </div>
 
-        <details>
-          <summary>Advanced render options</summary>
-          <div class="grid">
-            <label>
-              Openpilot directory
-              <input name="openpilot_dir" type="text">
-            </label>
-            <label>
-              Data root
-              <input name="data_root" type="text">
-            </label>
-            <label>
-              Explicit data dir
-              <input name="data_dir" type="text" placeholder="Optional">
-            </label>
-            <label>
-              Forward-upon-wide H
-              <input name="forward_upon_wide_h" type="text" placeholder="2.2 or auto">
-            </label>
-            <label class="inline-check">
-              <span><input name="windowed" type="checkbox">Windowed renderer</span>
-            </label>
-            <label class="inline-check">
-              <span><input name="skip_openpilot_update" type="checkbox">Skip openpilot update</span>
-            </label>
-            <label class="inline-check">
-              <span><input name="skip_openpilot_bootstrap" type="checkbox">Skip openpilot bootstrap</span>
-            </label>
-            <label class="inline-check">
-              <span><input name="skip_download" type="checkbox">Reuse downloaded route data</span>
-            </label>
+            <details>
+              <summary>Advanced render options</summary>
+              <div class="grid">
+                <label>
+                  Openpilot directory
+                  <input name="openpilot_dir" type="text">
+                </label>
+                <label>
+                  Data root
+                  <input name="data_root" type="text">
+                </label>
+                <label>
+                  Explicit data dir
+                  <input name="data_dir" type="text" placeholder="Optional">
+                </label>
+                <label>
+                  Forward-upon-wide H
+                  <input name="forward_upon_wide_h" type="text" placeholder="2.2 or auto">
+                </label>
+                <label class="inline-check">
+                  <span><input name="windowed" type="checkbox">Windowed renderer</span>
+                </label>
+                <label class="inline-check">
+                  <span><input name="skip_openpilot_update" type="checkbox">Skip openpilot update</span>
+                </label>
+                <label class="inline-check">
+                  <span><input name="skip_openpilot_bootstrap" type="checkbox">Skip openpilot bootstrap</span>
+                </label>
+                <label class="inline-check">
+                  <span><input name="skip_download" type="checkbox">Reuse downloaded route data</span>
+                </label>
+              </div>
+            </details>
+
+            <details>
+              <summary>Driver-face options</summary>
+              <div class="grid">
+                <label>
+                  Driver-face anonymization
+                  <select name="driver_face_anonymization" data-options="driver_face_anonymization"></select>
+                </label>
+                <label>
+                  Profile
+                  <select name="driver_face_profile" data-options="driver_face_profiles"></select>
+                </label>
+                <label>
+                  Passenger redaction
+                  <select name="passenger_redaction_style" data-options="passenger_redaction_styles"></select>
+                </label>
+                <label>
+                  Donor selection
+                  <select name="driver_face_selection" data-options="driver_face_selection_modes"></select>
+                </label>
+                <label>
+                  Face preset
+                  <select name="driver_face_preset" data-options="driver_face_presets"></select>
+                </label>
+                <label>
+                  Source image
+                  <input name="driver_face_source_image" type="text">
+                </label>
+                <label>
+                  Donor bank dir
+                  <input name="driver_face_donor_bank_dir" type="text">
+                </label>
+                <label>
+                  FaceFusion root
+                  <input name="facefusion_root" type="text">
+                </label>
+                <label>
+                  FaceFusion model
+                  <input name="facefusion_model" type="text">
+                </label>
+              </div>
+            </details>
+
+            <div class="button-row" style="margin-top: 14px;">
+              <button type="submit">Start clip</button>
+              <button id="refresh-now" type="button" class="secondary">Refresh</button>
+            </div>
+            <div id="form-message" class="message muted"></div>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="job-header">
+            <div>
+              <h2>Queue and progress</h2>
+              <p class="muted">Queued jobs run one at a time to avoid multiple heavy renders competing for the same local machine.</p>
+            </div>
           </div>
-        </details>
-
-        <details>
-          <summary>Driver-face options</summary>
-          <div class="grid">
-            <label>
-              Driver-face anonymization
-              <select name="driver_face_anonymization" data-options="driver_face_anonymization"></select>
-            </label>
-            <label>
-              Profile
-              <select name="driver_face_profile" data-options="driver_face_profiles"></select>
-            </label>
-            <label>
-              Passenger redaction
-              <select name="passenger_redaction_style" data-options="passenger_redaction_styles"></select>
-            </label>
-            <label>
-              Donor selection
-              <select name="driver_face_selection" data-options="driver_face_selection_modes"></select>
-            </label>
-            <label>
-              Face preset
-              <select name="driver_face_preset" data-options="driver_face_presets"></select>
-            </label>
-            <label>
-              Source image
-              <input name="driver_face_source_image" type="text">
-            </label>
-            <label>
-              Donor bank dir
-              <input name="driver_face_donor_bank_dir" type="text">
-            </label>
-            <label>
-              FaceFusion root
-              <input name="facefusion_root" type="text">
-            </label>
-            <label>
-              FaceFusion model
-              <input name="facefusion_model" type="text">
-            </label>
-          </div>
-        </details>
-
-        <div class="button-row" style="margin-top: 14px;">
-          <button type="submit">Start clip</button>
-          <button id="refresh-now" type="button" class="secondary">Refresh</button>
-        </div>
-        <div id="form-message" class="message muted"></div>
-      </form>
-    </section>
-
-    <section class="card">
-      <div class="job-header">
-        <div>
-          <h2>Queue and progress</h2>
-          <p class="muted">Queued jobs run one at a time to avoid multiple heavy renders competing for the same local machine.</p>
-        </div>
+          <div id="jobs" class="jobs"></div>
+        </section>
       </div>
-      <div id="jobs" class="jobs"></div>
-    </section>
 
-    <section class="card">
-      <h2>Output folder</h2>
-      <div id="outputs" class="outputs"></div>
-    </section>
+      <div class="side-column">
+        <section class="card">
+          <h2>Output folder</h2>
+          <p class="muted">Finished clips stay visible here, grouped by parent route.</p>
+          <div id="outputs" class="outputs"></div>
+        </section>
+      </div>
+    </div>
   </main>
 
   <script>
     const state = {
       options: null,
+      outputsSignature: null,
     };
 
-    const fieldsAsIntegers = new Set(["start_seconds", "length_seconds", "smear_seconds", "target_mb"]);
-    const fieldsAsBooleans = new Set(["qcam", "windowed", "skip_openpilot_update", "skip_openpilot_bootstrap", "skip_download"]);
+    const fieldsAsIntegers = new Set(["start_seconds", "length_seconds", "bookmark_padding_seconds", "smear_seconds", "target_mb"]);
+    const fieldsAsBooleans = new Set(["use_bookmarks", "qcam", "windowed", "skip_openpilot_update", "skip_openpilot_bootstrap", "skip_download"]);
 
     async function api(path, options = {}) {
       const response = await fetch(path, {
@@ -576,6 +680,14 @@
       return "";
     }
 
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
     function renderJobs(jobs) {
       const root = document.getElementById("jobs");
       if (!jobs.length) {
@@ -648,23 +760,96 @@
       return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
     }
 
+    function buildOutputsSignature(outputs) {
+      return JSON.stringify(outputs.map((output) => [
+        output.name,
+        output.modified_at || "",
+        output.size_bytes,
+        output.url,
+      ]));
+    }
+
+    function outputGroupKey(name) {
+      return name
+        .replace(/\.mp4$/i, "")
+        .replace(/_BM\d+$/i, "")
+        .replace(/-\d+$/i, "");
+    }
+
+    function outputGroupLabel(groupKey) {
+      const separatorIndex = groupKey.indexOf("_");
+      if (separatorIndex === -1) {
+        return groupKey;
+      }
+      return `${groupKey.slice(0, separatorIndex)}|${groupKey.slice(separatorIndex + 1)}`;
+    }
+
+    function groupOutputs(outputs) {
+      const groups = [];
+      const byKey = new Map();
+      for (const output of outputs) {
+        const key = outputGroupKey(output.name);
+        let group = byKey.get(key);
+        if (!group) {
+          group = { key, label: outputGroupLabel(key), outputs: [] };
+          byKey.set(key, group);
+          groups.push(group);
+        }
+        group.outputs.push(output);
+      }
+      return groups;
+    }
+
     function renderOutputs(outputs) {
       const root = document.getElementById("outputs");
+      const signature = buildOutputsSignature(outputs);
+      if (state.outputsSignature === signature) {
+        return;
+      }
+      state.outputsSignature = signature;
       if (!outputs.length) {
         root.innerHTML = '<div class="empty">No clips in shared/ yet.</div>';
         return;
       }
-      root.innerHTML = outputs.map((output) => `
-        <article class="output">
-          <div class="output-header">
-            <div>
-              <strong><a href="${output.url}" download>${output.name}</a></strong>
-              <div class="muted">Modified: ${output.modified_at || "n/a"}</div>
+      const groups = groupOutputs(outputs);
+      root.innerHTML = `
+        ${groups.map((group) => `
+          <section class="output-group">
+            <div class="output-group-header">
+              <strong>${escapeHtml(group.label)}</strong>
+              <span class="muted">${group.outputs.length} clip${group.outputs.length === 1 ? "" : "s"}</span>
             </div>
-            <div class="muted">${formatBytes(output.size_bytes)}</div>
-          </div>
-        </article>
-      `).join("");
+            <div class="output-group-body">
+              <div class="outputs-table-wrap">
+                <table class="outputs-table">
+                  <thead>
+                    <tr>
+                      <th>Clip</th>
+                      <th>Modified</th>
+                      <th>Size</th>
+                      <th>Play</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${group.outputs.map((output) => `
+                      <tr>
+                        <td><strong><a href="${output.url}" download>${escapeHtml(output.name)}</a></strong></td>
+                        <td class="muted">${escapeHtml(output.modified_at || "n/a")}</td>
+                        <td class="muted">${formatBytes(output.size_bytes)}</td>
+                        <td>
+                          <video class="output-player" controls preload="metadata" playsinline>
+                            <source src="${output.url}" type="video/mp4">
+                          </video>
+                        </td>
+                      </tr>
+                    `).join("")}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        `).join("")}
+      `;
     }
 
     async function refreshAuth() {
@@ -692,11 +877,12 @@
       setMessage("Queueing clip...");
       try {
         const payload = serializeForm();
-        await api("/api/jobs", {
+        const response = await api("/api/jobs", {
           method: "POST",
           body: JSON.stringify(payload),
         });
-        setMessage("Clip queued.");
+        const queuedCount = Number.isInteger(response?.job_count) ? response.job_count : (Array.isArray(response?.jobs) ? response.jobs.length : 1);
+        setMessage(queuedCount === 1 ? "Clip queued." : `Queued ${queuedCount} bookmark clips.`);
         await refreshAll();
       } catch (error) {
         setMessage(error.message, true);
